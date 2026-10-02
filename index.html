@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Car Soccer</title>
+
+<style>
+* {
+    box-sizing: border-box;
+    user-select: none;
+}
+
+body {
+    margin: 0;
+    background: #10131a;
+    color: white;
+    font-family: Arial, sans-serif;
+    overflow: hidden;
+}
+
+canvas {
+    display: block;
+    margin: auto;
+    background: #151b25;
+}
+
+#help {
+    position: fixed;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #aaa;
+    font-size: 14px;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="game" width="1200" height="650"></canvas>
+
+<div id="help">
+    A/D or ←/→ = Drive &nbsp; | &nbsp; W / ↑ = Jump &nbsp; | &nbsp;
+    Space = Boost &nbsp; | &nbsp; Q/E = Air Roll
+</div>
+
+<script>
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const W = canvas.width;
+const H = canvas.height;
+
+const gravity = 0.42;
+const ground = 570;
+
+const keys = {};
+
+window.addEventListener("keydown", e => {
+    keys[e.key.toLowerCase()] = true;
+
+    if (
+        ["arrowup","arrowdown","arrowleft","arrowright"," ","w","a","s","d","q","e"]
+        .includes(e.key.toLowerCase())
+    ) {
+        e.preventDefault();
+    }
+});
+
+window.addEventListener("keyup", e => {
+    keys[e.key.toLowerCase()] = false;
+});
+
+
+/* =========================
+   GAME STATE
+========================= */
+
+let playerScore = 0;
+let aiScore = 0;
+
+let timeLeft = 120;
+
+let gameOver = false;
+let goalPause = 0;
+
+let lastTime = performance.now();
+
+
+/* =========================
+   PLAYER
+========================= */
+
+const player = {
+    x: 280,
+    y: ground - 38,
+
+    vx: 0,
+    vy: 0,
+
+    width: 82,
+    height: 38,
+
+    angle: 0,
+    angularVelocity: 0,
+
+    grounded: false,
+
+    boost: 100,
+
+    color: "#26a9ff"
+};
+
+
+/* =========================
+   AI
+========================= */
+
+const ai = {
+    x: 920,
+    y: ground - 38,
+
+    vx: 0,
+    vy: 0,
+
+    width: 82,
+    height: 38,
+
+    angle: Math.PI,
+
+    angularVelocity: 0,
+
+    grounded: false,
+
+    boost: 100,
+
+    color: "#ff405d"
+};
+
+
+/* =========================
+   BALL
+========================= */
+
+const ball = {
+    x: W / 2,
+    y: 300,
+
+    vx: 0,
+    vy: 0,
+
+    radius: 19
+};
+
+
+/* =========================
+   PARTICLES
+========================= */
+
+let particles = [];
+
+function particle(x, y, color, amount = 8) {
+
+    for (let i = 0; i < amount; i++) {
+
+        particles.push({
+            x,
+            y,
+
+            vx: (Math.random() - .5) * 8,
+            vy: (Math.random() - .5) * 8,
+
+            life: 30 + Math.random() * 30,
+
+            color
+        });
+    }
+}
+
+
+/* =========================
+   RESET
+========================= */
+
+function resetPositions() {
+
+    player.x = 280;
+    player.y = ground - player.height;
+
+    player.vx = 0;
+    player.vy = 0;
+
+    player.angle = 0;
+    player.angularVelocity = 0;
+
+    player.boost = 100;
+
+
+    ai.x = 920;
+    ai.y = ground - ai.height;
+
+    ai.vx = 0;
+    ai.vy = 0;
+
+    ai.angle = Math.PI;
+    ai.angularVelocity = 0;
+
+    ai.boost = 100;
+
+
+    ball.x = W / 2;
+    ball.y = 280;
+
+    ball.vx = (Math.random() > .5 ? 2 : -2);
+    ball.vy = -2;
+}
+
+
+/* =========================
+   GOAL
+========================= */
+
+function scoreGoal(team) {
+
+    if (goalPause > 0 || gameOver)
+        return;
+
+    if (team === "player")
+        playerScore++;
+    else
+        aiScore++;
+
+    particle(
+        ball.x,
+        ball.y,
+        team === "player" ? "#26a9ff" : "#ff405d",
+        50
+    );
+
+    goalPause = 100;
+
+    resetPositions();
+
+    if (playerScore >= 5 || aiScore >= 5) {
+        gameOver = true;
+    }
+}
+
+
+/* =========================
+   PHYSICS HELPERS
+========================= */
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+
+function carPhysics(car, isPlayer) {
+
+    const acceleration = 0.48;
+    const maxSpeed = 8;
+
+    if (isPlayer) {
+
+        if (keys["a"] || keys["arrowleft"]) {
+            car.vx -= acceleration;
+        }
+
+        if (keys["d"] || keys["arrowright"]) {
+            car.vx += acceleration;
+        }
+
+        if ((keys["w"] || keys["arrowup"]) && car.grounded) {
+
+            car.vy = -10.5;
+            car.grounded = false;
+
+            particle(car.x, car.y + car.height, "#ddd", 8);
+        }
+
+        if (keys["q"]) {
+            car.angularVelocity -= .045;
+        }
+
+        if (keys["e"]) {
+            car.angularVelocity += .045;
+        }
+
+        if (keys[" "] && car.boost > 0) {
+
+            if (Math.abs(car.vx) < maxSpeed + 5) {
+
+                car.vx += car.vx >= 0 ? .32 : -.32;
+
+                particle(
+                    car.x - 40,
+                    car.y + 28,
+                    "#ffd34d",
+                    1
+                );
+            }
+
+            car.boost -= .7;
+        }
+
+    } else {
+
+        aiController();
+    }
+
+
+    car.vy += gravity;
+
+    car.x += car.vx;
+    car.y += car.vy;
+
+    car.angle += car.angularVelocity;
+
+    car.angularVelocity *= .92;
+
+
+    car.vx *= .985;
+
+
+    if (car.y + car.height >= ground) {
+
+        car.y = ground - car.height;
+
+        if (car.vy > 3)
+            particle(car.x, ground, "#777", 5);
+
+        car.vy = 0;
+
+        car.grounded = true;
+
+        car.angle *= .75;
+    }
+
+
+    if (car.x < 50) {
+        car.x = 50;
+        car.vx *= -.3;
+    }
+
+    if (car.x > W - 50 - car.width) {
+        car.x = W - 50 - car.width;
+        car.vx *= -.3;
+    }
+
+
+    car.vx = clamp(car.vx, -maxSpeed, maxSpeed);
+}
+
+
+/* =========================
+   AI
+========================= */
+
+function aiController() {
+
+    const targetX = ball.x;
+
+    let desired = 0;
+
+    if (targetX < ai.x + 10)
+        desired = -1;
+    else
+        desired = 1;
+
+
+    ai.vx += desired * .34;
+
+
+    if (
+        ball.y < ai.y - 30 &&
+        Math.abs(ball.x - ai.x) < 160 &&
+        ai.grounded
+    ) {
+        ai.vy = -10;
+        ai.grounded = false;
+    }
+
+
+    // AI attacks ball
+    if (
+        Math.abs(ball.x - ai.x) < 100 &&
+        Math.abs(ball.y - ai.y) < 100
+    ) {
+
+        if (ball.x < W / 2) {
+            ai.vx -= .3;
+        } else {
+            ai.vx += .2;
+        }
+    }
+
+
+    // AI boost
+    if (
+        Math.abs(ball.x - ai.x) > 250 &&
+        ai.boost > 0
+    ) {
+
+        ai.vx += desired * .22;
+        ai.boost -= .25;
+
+        particle(
+            ai.x - 40,
+            ai.y + 28,
+            "#ffae42",
+            1
+        );
+    }
+
+
+    ai.vx = clamp(ai.vx, -7, 7);
+}
+
+
+/* =========================
+   BALL PHYSICS
+========================= */
+
+function updateBall() {
+
+    ball.vy += gravity * .9;
+
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+
+
+    ball.vx *= .995;
+    ball.vy *= .995;
+
+
+    // Floor
+    if (ball.y + ball.radius >= ground) {
+
+        ball.y = ground - ball.radius;
+
+        ball.vy *= -.72;
+
+        ball.vx *= .98;
+
+        if (Math.abs(ball.vy) > 3)
+            particle(ball.x, ground, "#aaa", 4);
+    }
+
+
+    // Ceiling
+    if (ball.y - ball.radius < 55) {
+
+        ball.y = 55 + ball.radius;
+
+        ball.vy *= -.8;
+    }
+
+
+    // Side walls
+
+    if (ball.x - ball.radius < 25) {
+
+        // Left goal
+        if (ball.y > 430) {
+            scoreGoal("ai");
+            return;
+        }
+
+        ball.x = 25 + ball.radius;
+        ball.vx *= -.85;
+    }
+
+
+    if (ball.x + ball.radius > W - 25) {
+
+        // Right goal
+        if (ball.y > 430) {
+            scoreGoal("player");
+            return;
+        }
+
+        ball.x = W - 25 - ball.radius;
+        ball.vx *= -.85;
+    }
+
+
+    collideBallCar(ball, player);
+    collideBallCar(ball, ai);
+}
+
+
+/* =========================
+   BALL / CAR COLLISION
+========================= */
+
+function collideBallCar(b, car) {
+
+    const cx = car.x + car.width / 2;
+    const cy = car.y + car.height / 2;
+
+    const dx = b.x - cx;
+    const dy = b.y - cy;
+
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    const radius = b.radius + 38;
+
+    if (distance < radius) {
+
+        let nx = dx / distance;
+        let ny = dy / distance;
+
+        if (!isFinite(nx)) {
+            nx = 1;
+            ny = 0;
+        }
+
+        const overlap = radius - distance;
+
+        b.x += nx * overlap;
+        b.y += ny * overlap;
+
+        const impact =
+            Math.sqrt(car.vx * car.vx + car.vy * car.vy) + 3;
+
+        b.vx += nx * impact;
+        b.vy += ny * impact;
+
+        b.vx += car.vx * .45;
+        b.vy += car.vy * .35;
+
+        b.vx = clamp(b.vx, -15, 15);
+        b.vy = clamp(b.vy, -15, 15);
+
+        particle(
+            b.x,
+            b.y,
+            car.color,
+            7
+        );
+    }
+}
+
+
+/* =========================
+   PARTICLE UPDATE
+========================= */
+
+function updateParticles() {
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+
+        const p = particles[i];
+
+        p.x += p.vx;
+        p.y += p.vy;
+
+        p.vy += .12;
+
+        p.life--;
+
+        if (p.life <= 0)
+            particles.splice(i, 1);
+    }
+}
+
+
+/* =========================
+   DRAW FIELD
+========================= */
+
+function drawField() {
+
+    // Sky
+    const gradient = ctx.createLinearGradient(0, 0, 0, H);
+
+    gradient.addColorStop(0, "#182234");
+    gradient.addColorStop(1, "#0d1119");
+
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+
+
+    // Arena
+    ctx.fillStyle = "#202b31";
+    ctx.fillRect(25, 55, W - 50, ground - 55);
+
+
+    // Grass
+    ctx.fillStyle = "#172d25";
+    ctx.fillRect(25, 430, W - 50, ground - 430);
+
+
+    // Field lines
+    ctx.strokeStyle = "#3d5b54";
+    ctx.lineWidth = 3;
+
+    ctx.beginPath();
+
+    ctx.moveTo(W / 2, 55);
+    ctx.lineTo(W / 2, ground);
+
+    ctx.stroke();
+
+
+    ctx.beginPath();
+
+    ctx.arc(W / 2, ground - 20, 75, 0, Math.PI * 2);
+
+    ctx.stroke();
+
+
+    // Floor line
+    ctx.strokeStyle = "#8bd1b5";
+    ctx.lineWidth = 5;
+
+    ctx.beginPath();
+
+    ctx.moveTo(25, ground);
+    ctx.lineTo(W - 25, ground);
+
+    ctx.stroke();
+
+
+    // Walls
+    ctx.strokeStyle = "#607b86";
+    ctx.lineWidth = 7;
+
+    ctx.strokeRect(25, 55, W - 50, ground - 55);
+
+
+    // Goals
+
+    ctx.fillStyle = "rgba(38,169,255,.25)";
+    ctx.fillRect(25, 430, 90, 140);
+
+    ctx.fillStyle = "rgba(255,64,93,.25)";
+    ctx.fillRect(W - 115, 430, 90, 140);
+
+
+    ctx.strokeStyle = "#26a9ff";
+    ctx.strokeRect(25, 430, 90, 140);
+
+    ctx.strokeStyle = "#ff405d";
+    ctx.strokeRect(W - 115, 430, 90, 140);
+}
+
+
+/* =========================
+   DRAW CAR
+========================= */
+
+function drawCar(car) {
+
+    ctx.save();
+
+    const cx = car.x + car.width / 2;
+    const cy = car.y + car.height / 2;
+
+    ctx.translate(cx, cy);
+
+    ctx.rotate(car.angle);
+
+
+    // Shadow
+    ctx.save();
+
+    ctx.rotate(-car.angle);
+
+    ctx.fillStyle = "rgba(0,0,0,.3)";
+    ctx.beginPath();
+
+    ctx.ellipse(
+        0,
+        25,
+        42,
+        8,
+        0,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+    ctx.restore();
+
+
+    // Main body
+    ctx.fillStyle = car.color;
+
+    ctx.beginPath();
+
+    ctx.roundRect(
+        -car.width / 2,
+        -car.height / 2,
+        car.width,
+        car.height,
+        10
+    );
+
+    ctx.fill();
+
+
+    // Roof
+    ctx.fillStyle = car.color;
+
+    ctx.beginPath();
+
+    ctx.moveTo(-27, -19);
+    ctx.lineTo(-8, -34);
+    ctx.lineTo(20, -34);
+    ctx.lineTo(34, -15);
+    ctx.closePath();
+
+    ctx.fill();
+
+
+    // Window
+    ctx.fillStyle = "#17212c";
+
+    ctx.beginPath();
+
+    ctx.moveTo(-9, -29);
+    ctx.lineTo(8, -29);
+    ctx.lineTo(22, -17);
+    ctx.lineTo(-17, -17);
+    ctx.closePath();
+
+    ctx.fill();
+
+
+    // Wheels
+    ctx.fillStyle = "#080a0d";
+
+    for (const x of [-28, 28]) {
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x,
+            19,
+            11,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fill();
+
+
+        ctx.fillStyle = "#777";
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x,
+            19,
+            5,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fill();
+
+        ctx.fillStyle = "#080a0d";
+    }
+
+
+    ctx.restore();
+}
+
+
+/* =========================
+   DRAW BALL
+========================= */
+
+function drawBall() {
+
+    const gradient = ctx.createRadialGradient(
+        ball.x - 6,
+        ball.y - 7,
+        2,
+        ball.x,
+        ball.y,
+        ball.radius
+    );
+
+    gradient.addColorStop(0, "#ffffff");
+    gradient.addColorStop(.5, "#ddd");
+    gradient.addColorStop(1, "#777");
+
+    ctx.fillStyle = gradient;
+
+    ctx.beginPath();
+
+    ctx.arc(
+        ball.x,
+        ball.y,
+        ball.radius,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 2;
+
+    ctx.stroke();
+
+
+    // Ball pattern
+    ctx.fillStyle = "#444";
+
+    for (let i = 0; i < 5; i++) {
+
+        const a = i * Math.PI * 2 / 5;
+
+        ctx.beginPath();
+
+        ctx.arc(
+            ball.x + Math.cos(a) * 10,
+            ball.y + Math.sin(a) * 10,
+            3,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fill();
+    }
+}
+
+
+/* =========================
+   DRAW PARTICLES
+========================= */
+
+function drawParticles() {
+
+    for (const p of particles) {
+
+        ctx.globalAlpha =
+            Math.max(0, p.life / 50);
+
+        ctx.fillStyle = p.color;
+
+        ctx.fillRect(
+            p.x,
+            p.y,
+            4,
+            4
+        );
+    }
+
+    ctx.globalAlpha = 1;
+}
+
+
+/* =========================
+   UI
+========================= */
+
+function drawUI() {
+
+    // Score
+
+    ctx.textAlign = "center";
+
+    ctx.font = "bold 44px Arial";
+
+    ctx.fillStyle = "#26a9ff";
+
+    ctx.fillText(
+        playerScore,
+        W / 2 - 65,
+        45
+    );
+
+    ctx.fillStyle = "#ff405d";
+
+    ctx.fillText(
+        aiScore,
+        W / 2 + 65,
+        45
+    );
+
+
+    // Timer
+
+    ctx.font = "bold 24px Arial";
+    ctx.fillStyle = "white";
+
+    const minutes =
+        Math.floor(timeLeft / 60);
+
+    const seconds =
+        Math.floor(timeLeft % 60)
+        .toString()
+        .padStart(2, "0");
+
+    ctx.fillText(
+        `${minutes}:${seconds}`,
+        W / 2,
+        38
+    );
+
+
+    // Boost meter
+
+    ctx.textAlign = "left";
+
+    ctx.font = "bold 16px Arial";
+
+    ctx.fillStyle = "white";
+
+    ctx.fillText(
+        "BOOST",
+        30,
+        30
+    );
+
+    ctx.strokeStyle = "#aaa";
+
+    ctx.strokeRect(
+        30,
+        38,
+        160,
+        12
+    );
+
+    ctx.fillStyle = "#ffd34d";
+
+    ctx.fillRect(
+        30,
+        38,
+        160 * player.boost / 100,
+        12
+    );
+
+
+    // Goal pause message
+
+    if (goalPause > 0 && !gameOver) {
+
+        ctx.textAlign = "center";
+
+        ctx.font = "bold 60px Arial";
+
+        ctx.fillStyle =
+            ball.x < W / 2
+            ? "#ff405d"
+            : "#26a9ff";
+
+        ctx.fillText(
+            "GOAL!",
+            W / 2,
+            180
+        );
+    }
+
+
+    // Game over
+
+    if (gameOver) {
+
+        ctx.fillStyle = "rgba(0,0,0,.72)";
+
+        ctx.fillRect(
+            0,
+            0,
+            W,
+            H
+        );
+
+
+        ctx.textAlign = "center";
+
+        ctx.font = "bold 70px Arial";
+
+        if (playerScore > aiScore) {
+
+            ctx.fillStyle = "#26a9ff";
+
+            ctx.fillText(
+                "YOU WIN!",
+                W / 2,
+                250
+            );
+
+        } else {
+
+            ctx.fillStyle = "#ff405d";
+
+            ctx.fillText(
+                "AI WINS!",
+                W / 2,
+                250
+            );
+        }
+
+
+        ctx.font = "bold 35px Arial";
+
+        ctx.fillStyle = "white";
+
+        ctx.fillText(
+            `${playerScore} - ${aiScore}`,
+            W / 2,
+            315
+        );
+
+
+        ctx.font = "20px Arial";
+
+        ctx.fillText(
+            "Press ENTER to play again",
+            W / 2,
+            370
+        );
+    }
+}
+
+
+/* =========================
+   TIMER
+========================= */
+
+function updateTimer(dt) {
+
+    if (
+        !gameOver &&
+        goalPause <= 0
+    ) {
+
+        timeLeft -= dt;
+
+        if (timeLeft <= 0) {
+
+            timeLeft = 0;
+
+            gameOver = true;
+        }
+    }
+}
+
+
+/* =========================
+   MAIN UPDATE
+========================= */
+
+function update(dt) {
+
+    if (keys["enter"] && gameOver) {
+
+        playerScore = 0;
+        aiScore = 0;
+
+        timeLeft = 120;
+
+        gameOver = false;
+
+        goalPause = 0;
+
+        resetPositions();
+    }
+
+
+    if (goalPause > 0) {
+
+        goalPause--;
+
+        return;
+    }
+
+
+    if (gameOver)
+        return;
+
+
+    carPhysics(player, true);
+
+    carPhysics(ai, false);
+
+    updateBall();
+
+    updateParticles();
+
+    updateTimer(dt);
+}
+
+
+/* =========================
+   DRAW
+========================= */
+
+function draw() {
+
+    drawField();
+
+    drawParticles();
+
+    drawBall();
+
+    drawCar(player);
+
+    drawCar(ai);
+
+    drawUI();
+}
+
+
+/* =========================
+   GAME LOOP
+========================= */
+
+function loop(now) {
+
+    const dt =
+        Math.min((now - lastTime) / 1000, .033);
+
+    lastTime = now;
+
+    update(dt);
+
+    draw();
+
+    requestAnimationFrame(loop);
+}
+
+
+resetPositions();
+
+requestAnimationFrame(loop);
+
+</script>
+
+</body>
+</html>
